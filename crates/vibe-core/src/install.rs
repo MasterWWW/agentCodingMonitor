@@ -127,12 +127,10 @@ fn write_hook_cmd(exe: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Shell-safe hook command: paths on macOS often contain spaces (`Application Support`).
 fn hook_command(cmd: &str, source_flag: &str) -> String {
-    if cfg!(windows) {
-        format!("\"{cmd}\" --source {source_flag}")
-    } else {
-        format!("{cmd} --source {source_flag}")
-    }
+    let escaped = cmd.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{escaped}\" --source {source_flag}")
 }
 
 fn hook_entry(cmd: &str, event: &str, source_flag: &str) -> Value {
@@ -342,7 +340,9 @@ pub async fn doctor(hook_binary_src: Option<&Path>) -> DoctorReport {
     let codex_hooks_feature = codex_feature_enabled();
 
     if !hook_binary_installed {
-        messages.push("vibe-hook binary not installed in ~/.vibe-monitor/bin".to_string());
+        messages.push(
+            "vibe-hook binary not installed in the app data directory (see README)".to_string(),
+        );
     }
     if !cursor_hook {
         messages.push("Cursor hooks not configured".to_string());
@@ -395,5 +395,21 @@ fn codex_feature_enabled() -> Option<bool> {
         Some(false)
     } else {
         Some(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hook_command_quotes_paths_with_spaces() {
+        let cmd =
+            "/Users/me/Library/Application Support/com.VibeMonitor.vibe-monitor/bin/vibe-hook";
+        let out = hook_command(cmd, "cursor");
+        assert_eq!(
+            out,
+            "\"/Users/me/Library/Application Support/com.VibeMonitor.vibe-monitor/bin/vibe-hook\" --source cursor"
+        );
     }
 }

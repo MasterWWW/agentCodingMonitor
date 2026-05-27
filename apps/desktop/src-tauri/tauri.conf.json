@@ -47,6 +47,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "externalBin": ["binaries/vibe-hook"],
     "macOS": {
       "infoPlist": "Info.plist"
     },

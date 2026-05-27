@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [{ "command": "{{VIBE_HOOK}} --source cursor", "metadata": { "source": "vibe-monitor" } }],
+    "beforeSubmitPrompt": [{ "command": "{{VIBE_HOOK}} --source cursor", "metadata": { "source": "vibe-monitor" } }],
+    "preToolUse": [{ "command": "{{VIBE_HOOK}} --source cursor", "metadata": { "source": "vibe-monitor" } }],
+    "postToolUse": [{ "command": "{{VIBE_HOOK}} --source cursor", "metadata": { "source": "vibe-monitor" } }],
+    "stop": [{ "command": "{{VIBE_HOOK}} --source cursor", "metadata": { "source": "vibe-monitor" } }]
+  }
+}

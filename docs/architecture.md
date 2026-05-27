@@ -29,7 +29,7 @@ Persisted in `state.json` as `presentation`:
 | Mode | Behavior |
 |------|----------|
 | `float` | Transparent always-on-top HUD window; default on macOS |
-| `menubar` | Hide HUD; tray icon color reflects current phase |
+| `menubar` | Hide HUD; tray icon shape switches per phase and (macOS/Linux) menu-bar title shows `Source · Phase` while Active/WaitingUser — see `docs/plans/tray-stateful-content.md` |
 
 macOS additionally:
 

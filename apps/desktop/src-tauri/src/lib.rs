@@ -232,6 +232,21 @@ fn tray_icon_fallback() -> tauri::Result<tauri::image::Image<'static>> {
     })
 }
 
+// 联动 `refresh_tray_status` / `tray_status_title`：状态变化时切换图标
+fn tray_icon_for_phase(phase: VibePhase) -> tauri::Result<tauri::image::Image<'static>> {
+    let name = match phase {
+        VibePhase::Active => "tray-active.png",
+        VibePhase::WaitingUser => "tray-waiting.png",
+        VibePhase::Idle => "tray-idle.png",
+        VibePhase::Stopped => "tray-stopped.png",
+        VibePhase::Unknown => "tray-unknown.png",
+    };
+    match tauri::image::Image::from_path(icons_dir().join(name)) {
+        Ok(img) => Ok(img),
+        Err(_) => tray_icon_brand(),
+    }
+}
+
 fn apply_presentation(app: &AppHandle, mode: HudPresentation) {
     let Some(w) = app.get_webview_window("main") else {
         return;
@@ -259,10 +274,57 @@ fn tray_status_tooltip(snap: &StatusSnapshot) -> String {
     status_line(snap, source)
 }
 
-fn refresh_tray_status(app: &AppHandle, snap: &StatusSnapshot) {
-    if let Some(tray) = app.tray_by_id(TRAY_ID) {
-        let _ = tray.set_tooltip(Some(tray_status_tooltip(snap)));
+fn source_short_label(source: VibeSource) -> &'static str {
+    match source {
+        VibeSource::Cursor => "Cursor",
+        VibeSource::ClaudeCode => "Claude",
+        VibeSource::Codex => "Codex",
     }
+}
+
+// 菜单栏标题：进行中 / 等待你 时展示「源 · 状态」；其他状态留空以避免占位。
+// Windows 平台 `set_title` 不被支持，状态主要靠图标切换体现，参考 `tray_icon_for_phase`。
+fn tray_status_title(snap: &StatusSnapshot) -> Option<String> {
+    tray_status_title_for(snap, state::load_default_source())
+}
+
+fn tray_status_title_for(snap: &StatusSnapshot, default: VibeSource) -> Option<String> {
+    let source = state::pick_display_source(snap, default);
+    let phase = current_phase(snap, source);
+    match phase {
+        VibePhase::Active | VibePhase::WaitingUser => Some(format!(
+            "{} · {}",
+            source_short_label(source),
+            phase_label_cn(phase)
+        )),
+        _ => None,
+    }
+}
+
+fn current_phase(snap: &StatusSnapshot, source: VibeSource) -> VibePhase {
+    let session = snap.sessions.iter().find(|s| s.source == source);
+    let health = snap.sources.get(&source);
+    session
+        .map(|s| s.phase)
+        .or_else(|| health.map(|h| h.phase))
+        .unwrap_or(VibePhase::Unknown)
+}
+
+fn refresh_tray_status(app: &AppHandle, snap: &StatusSnapshot) {
+    let Some(tray) = app.tray_by_id(TRAY_ID) else {
+        return;
+    };
+    let _ = tray.set_tooltip(Some(tray_status_tooltip(snap)));
+
+    let source = state::pick_display_source(snap, state::load_default_source());
+    let phase = current_phase(snap, source);
+    if let Ok(icon) = tray_icon_for_phase(phase) {
+        let _ = tray.set_icon(Some(icon));
+        let _ = tray.set_icon_as_template(true);
+    }
+
+    // `set_title` 在 Windows 不支持，调用同样安全（返回 Ok 但无效果）；macOS / Linux 上即时联动。
+    let _ = tray.set_title(tray_status_title(snap).as_deref());
 }
 
 fn phase_label_cn(phase: VibePhase) -> &'static str {
@@ -582,11 +644,10 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     };
     let menu = build_tray_menu(app, &empty)?;
 
-    let icon = tray_icon_fallback().or_else(|e| {
-        app.default_window_icon()
-            .cloned()
-            .ok_or(e)
-    })?;
+    // 初始 phase 为 Unknown，使用对应的 `tray-unknown.png`；失败回退到品牌图与窗口图标。
+    let icon = tray_icon_for_phase(VibePhase::Unknown)
+        .or_else(|_| tray_icon_fallback())
+        .or_else(|e| app.default_window_icon().cloned().ok_or(e))?;
 
     TrayIconBuilder::with_id(TRAY_ID)
         .icon(icon)
@@ -716,4 +777,86 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use std::collections::HashMap;
+    use vibe_core::types::Session;
+
+    fn snap_with_session(source: VibeSource, phase: VibePhase) -> StatusSnapshot {
+        StatusSnapshot {
+            daemon_ok: true,
+            port: 0,
+            lite_mode: false,
+            sources: HashMap::new(),
+            sessions: vec![Session {
+                source,
+                session_id: "s1".into(),
+                cwd: None,
+                task_title: None,
+                last_tool: None,
+                last_activity_at: Utc::now(),
+                phase,
+            }],
+        }
+    }
+
+    #[test]
+    fn title_shows_source_and_phase_when_active() {
+        let snap = snap_with_session(VibeSource::Cursor, VibePhase::Active);
+        assert_eq!(
+            tray_status_title_for(&snap, VibeSource::Cursor),
+            Some("Cursor · 进行中".to_string())
+        );
+    }
+
+    #[test]
+    fn title_shows_when_waiting_user() {
+        let snap = snap_with_session(VibeSource::ClaudeCode, VibePhase::WaitingUser);
+        assert_eq!(
+            tray_status_title_for(&snap, VibeSource::ClaudeCode),
+            Some("Claude · 等待你".to_string())
+        );
+    }
+
+    #[test]
+    fn title_hidden_when_idle_or_stopped_or_unknown() {
+        for phase in [VibePhase::Idle, VibePhase::Stopped, VibePhase::Unknown] {
+            let snap = snap_with_session(VibeSource::Codex, phase);
+            assert_eq!(
+                tray_status_title_for(&snap, VibeSource::Codex),
+                None,
+                "phase {:?} should hide title",
+                phase
+            );
+        }
+    }
+
+    #[test]
+    fn title_uses_claude_short_label() {
+        let snap = snap_with_session(VibeSource::ClaudeCode, VibePhase::Active);
+        let title = tray_status_title_for(&snap, VibeSource::ClaudeCode).unwrap();
+        assert!(title.starts_with("Claude "), "got: {title}");
+        assert!(!title.contains("Claude Code"), "got: {title}");
+    }
+
+    #[test]
+    fn icon_resolves_for_every_phase() {
+        for phase in [
+            VibePhase::Active,
+            VibePhase::WaitingUser,
+            VibePhase::Idle,
+            VibePhase::Stopped,
+            VibePhase::Unknown,
+        ] {
+            assert!(
+                tray_icon_for_phase(phase).is_ok(),
+                "icon for phase {:?} should load",
+                phase
+            );
+        }
+    }
 }
